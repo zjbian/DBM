@@ -4,16 +4,21 @@ Reference implementation of **DBM-Bid: Dual-Branch Modulated Bidding for Offline
 Constrained Auto-Bidding**. This is a clean extraction of the paper's method only —
 none of the exploratory variants from the research repo are included.
 
-The model is internally the `v2` backbone with the AWR-β5 training stack; its fully
-resolved configuration is `configs/dbm_bid.json` (257K parameters, the canonical 36.82
-setup on AuctionNet-Sparse).
+The model is internally the `v2` backbone with the AWR-weighted training stack
+(~257K parameters). A representative configuration is provided in `configs/dbm_bid.json`.
+
+> **Note on reproducibility.** This code runs on top of the AuctionNet bidding
+> environment, in which parts of the impression-level signals (e.g.\ value and noise
+> terms) are stochastic, so the simulator itself has non-trivial run-to-run variance.
+> The provided config is a reasonable reference, not a guaranteed recipe for any exact
+> score; expect some spread across seeds and environment instances.
 
 ## Layout
 
 ```
 DBM/
 ├── configs/
-│   └── dbm_bid.json          # resolved model + training config (the paper's full model)
+│   └── dbm_bid.json          # reference model + training configuration
 ├── model/                    # the architecture
 │   ├── base_dt.py            # Decision Transformer backbone
 │   ├── msdt_backbone.py      # multi-scale DT (legacy backbone, kept for the dispatch)
@@ -63,7 +68,7 @@ Trains on periods 7–13 of the AuctionNet-Sparse RL data
 - `checkpoints/dbm_bid_ckptNNNNNN.pt` — periodic checkpoints
 - `train_config.json`, `normalize_dict.pkl`
 
-Defaults reproduce the paper: `K=20`, `scale=40`, `train_steps=18000`,
+Reference training settings: `K=20`, `scale=40`, `train_steps=18000`,
 `batch_size=128`, `lr=1e-4`, `seed=42`.
 
 ## Evaluate

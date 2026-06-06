@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train DBM-Bid (the paper's full model). Reproduces the canonical 36.82 configuration.
+# Train DBM-Bid (the paper's model) with the reference configuration.
 set -e
 cd "$(dirname "$0")"
 
