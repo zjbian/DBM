@@ -5,7 +5,7 @@ Constrained Auto-Bidding**. This is a clean extraction of the paper's method onl
 none of the exploratory variants from the research repo are included.
 
 The model is internally the `v2` backbone with the AWR-weighted training stack
-(~257K parameters). A representative configuration is provided in `configs/dbm_bid.json`.
+(~227K parameters). A representative configuration is provided in `configs/dbm_bid.json`.
 
 > **Note on reproducibility.** This code runs on top of the AuctionNet bidding
 > environment, in which parts of the impression-level signals (e.g.\ value and noise
@@ -55,6 +55,37 @@ Two-stage dual-branch separation of *slow* budget signals from *fast* market sig
 ## Requirements
 
 Python 3.9+ and PyTorch. No other special dependencies.
+
+## Dataset
+
+Experiments use the **AuctionNet** large-scale auto-bidding benchmark. Download the
+data from the official release and place it locally, then point the scripts at it:
+
+- AuctionNet: <https://github.com/alimama-tech/AuctionNet>
+
+Two inputs are needed: (i) the offline **RL training data** (delivery periods 7–13),
+passed via `--data_dir`, and (ii) the **test traffic** for the held-out periods 14–20,
+passed via `--traffic_dir`. The `.sh` scripts ship with placeholder paths
+(`./data/auctionnet/...`) — edit them to your download location. Note that the
+AuctionNet simulator generates parts of each impression stochastically (e.g. value and
+noise terms), so scores vary somewhat from run to run.
+
+## Configuration
+
+`configs/dbm_bid.json` holds a single, flat configuration consumed by both training and
+evaluation. The main groups:
+
+- **Architecture** — `state_dim`, `K` (context length), `n_head`, `coarse_idx`/`fine_idx`
+  (the budget vs. market feature split), `local_window`, `scale`, `target_return`.
+- **Optimization / sampling** — `learning_rate`, `loss_weight_mode`,
+  `sampling_score_mode` (`awr`) and `sampling_awr_beta`, `enable_weighted_sampling`.
+- **Constraint-aware training switches** (`use_*`) with their weights — selective
+  imitation, stratified-prefix sampling, the budget-feasibility (C2) weight,
+  prefix-feasibility weighting, score-RTG, conservative regularization, the CPA-progress
+  reward, and hindsight truncation.
+
+Only the switches the paper's model uses are present; leave them as given to reproduce
+the reference model.
 
 ## Train
 

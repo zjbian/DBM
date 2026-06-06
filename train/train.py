@@ -77,7 +77,7 @@ def train_model(args):
         loss_weight_mode=method_cfg["loss_weight_mode"],
         loss_weight_min=method_cfg["loss_weight_min"],
         loss_weight_max=method_cfg["loss_weight_max"],
-        retrieval_topk=method_cfg["retrieval_topk"],
+        retrieval_topk=int(method_cfg.get("retrieval_topk", 4)),
         return_dim=method_cfg["return_dim"],
         use_score_rtg=bool(method_cfg.get("use_score_rtg", False)),
         use_cpa_slack_rtg=bool(method_cfg.get("use_cpa_slack_rtg", False)),
