@@ -1,0 +1,1 @@
+from .msdt_sampling_bidding_strategy import MSDTSamplingBiddingStrategy as PlayerBiddingStrategy

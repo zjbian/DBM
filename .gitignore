@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Training / eval outputs
+runs/
+*.pt
+*.pkl
+*.log
+benchmark_eval_results.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
