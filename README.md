@@ -52,6 +52,50 @@ Two-stage dual-branch separation of *slow* budget signals from *fast* market sig
 3. **ConstraintModulator**: a gated additive residual on the fused hidden, followed by
    a dynamic gate and a linear action head.
 
+## Results
+
+Main comparison on **AuctionNet-Sparse** (held-out periods 14–20), CPA-penalized
+score across five budget levels (% of the original budget). Higher is better; **bold**
+marks the best per column.
+
+| Method | 50% | 75% | 100% | 125% | 150% |
+|---|:--:|:--:|:--:|:--:|:--:|
+| DiffBid † | 9.9 | 15.4 | 19.5 | 25.3 | 30.8 |
+| USCB † | 11.5 | 14.9 | 17.5 | 26.7 | 31.3 |
+| CQL | 12.8 | 16.7 | 22.2 | 28.6 | 35.8 |
+| CDT † | 11.2 | 18.0 | 31.2 | 31.7 | 39.1 |
+| DT | 14.8 | 22.9 | 29.6 | 34.3 | 44.5 |
+| BCQ | 17.7 | 24.6 | 31.1 | 34.2 | 37.9 |
+| IQL | 16.5 | 22.1 | 30.0 | 37.1 | 43.1 |
+| GAS † | 18.4 | 27.5 | 36.1 | 40.0 | 46.5 |
+| EBaReT †§ | – | – | 36.5 | – | – |
+| GAVE † | 19.6 | 28.3 | 37.2 | 42.7 | 47.4 |
+| GRAD † | **20.0** | **28.5** | **37.4** | **43.2** | 47.5 |
+| **DBM-Bid (ours)** | **20.0** | 28.1 | 36.82 | 42.6 | **48.5** |
+
+DBM-Bid matches the strongest generative bidder at the tight end and leads at the loose
+end, while surpassing every offline-RL/DT baseline across budgets. The offline-RL and DT
+baselines (CQL, DT, BCQ, IQL) are re-run by us under this identical protocol; methods
+marked **†** (DiffBid, USCB, CDT, GAS, GAVE, GRAD) are taken from their original papers;
+**§** EBaReT is concurrent and reports only the standard (100%) budget. With ~227K
+parameters DBM-Bid is also smaller and faster than a standard encoder carrying the same
+training stack (227K vs. 317K params, 26.0 vs. 31.5 ms/batch).
+
+## Hyperparameters
+
+Key settings used to produce the reference model (full set in `configs/dbm_bid.json`):
+
+| Group | Setting |
+|---|---|
+| Backbone | hidden size 64, 4 attention heads, 3 Transformer layers, context length `K=20` (~227K params) |
+| State | `state_dim=16`; coarse/budget indices `0–11`, fine/market indices `{0,1,12–15}` (indices 0,1 = time-left, budget-left) |
+| Optimizer | AdamW, lr `1e-4`, weight decay `1e-4` |
+| Schedule | `18k` steps, batch size `128`, seed `42` |
+| Sampling | advantage-weighted (AWR) sample weighting, `β=5`; score-based RTG |
+| Return | `scale=40`; inference target-return searched over `{36, 40, 44, 48}` |
+| Data split | train periods `7–13`, evaluate periods `14–20` |
+| Hardware | single NVIDIA RTX 4090, ~90 min/run |
+
 ## Requirements
 
 Python 3.9+ and PyTorch. No other special dependencies.
