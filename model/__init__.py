@@ -1,1 +1,1 @@
-from .method_model import ResearchMSDTModel
+from .method_model import ResearchDBMModel

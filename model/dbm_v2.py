@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base_dt import Block, DecisionTransformer
-from .msdt_backbone import GranularityCalibrator
+from .dbm_backbone import GranularityCalibrator
 
 class CausalTemporalFusionV2(nn.Module):
 

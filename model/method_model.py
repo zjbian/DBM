@@ -1,6 +1,6 @@
 """DBM-Bid model wrapper.
 
-`ResearchMSDTModel` wraps the DBM-Bid backbone (``MultiScaleDecisionTransformerV2``)
+`ResearchDBMModel` wraps the DBM-Bid backbone (``MultiScaleDecisionTransformerV2``)
 with the constraint-aware training objective used in the paper:
 
 * feature/temporal dual-branch encoding is performed inside the backbone;
@@ -17,14 +17,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .msdt_v2 import MultiScaleDecisionTransformerV2
+from .dbm_v2 import MultiScaleDecisionTransformerV2
 
 def masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     mask = mask.float().unsqueeze(-1)
     denom = mask.sum(dim=1).clamp_min(1.0)
     return (x * mask).sum(dim=1) / denom
 
-class ResearchMSDTModel(nn.Module):
+class ResearchDBMModel(nn.Module):
     def __init__(self, *, config: Dict):
         super().__init__()
         self.config = dict(config)

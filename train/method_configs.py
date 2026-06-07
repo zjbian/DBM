@@ -15,7 +15,7 @@ _CFG_PATH = os.path.join(
 with open(_CFG_PATH, "r", encoding="utf-8") as _f:
     _DBM_CONFIG = json.load(_f)
 
-METHOD_CONFIGS = {"dbm_bid": _DBM_CONFIG, "msdt_v2_awr_beta5_fixed": _DBM_CONFIG}
+METHOD_CONFIGS = {"dbm_bid": _DBM_CONFIG, "dbm_v2_awr_beta5_fixed": _DBM_CONFIG}
 
 def build_method_config(method_name: str) -> dict:
     return deepcopy(_DBM_CONFIG)

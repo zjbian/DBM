@@ -136,7 +136,7 @@ def evaluate_single_period(agent, period_file: str, device: str = "cuda", budget
     }
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark-native evaluation for MSDT + sampling")
+    parser = argparse.ArgumentParser(description="Benchmark-native evaluation for DBM + sampling")
     parser.add_argument("--traffic_dir", type=str, default="./data/auctionnet/test_data")
     parser.add_argument("--periods", type=str, default="14,15,16,17,18,19,20")
     parser.add_argument("--device", type=str, default="cuda:0" if os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" else "cpu")
@@ -207,7 +207,7 @@ def main():
     elif load_dir:
         out_path = Path(load_dir) / "benchmark_eval_results.json"
     else:
-        out_path = Path(__file__).resolve().parents[1] / "saved_model" / "MSDT_sampling" / "benchmark_eval_results.json"
+        out_path = Path(__file__).resolve().parents[1] / "saved_model" / "DBM_sampling" / "benchmark_eval_results.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(__import__("json").dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("saved benchmark results to %s", out_path)

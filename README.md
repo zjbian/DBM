@@ -21,9 +21,9 @@ DBM/
 │   └── dbm_bid.json          # reference model + training configuration
 ├── model/                    # the architecture
 │   ├── base_dt.py            # Decision Transformer backbone
-│   ├── msdt_backbone.py      # multi-scale DT (legacy backbone, kept for the dispatch)
-│   ├── msdt_v2.py            # DBM-Bid backbone: GranularityCalibrator + CausalTemporalFusionV2
-│   ├── method_model.py       # ResearchMSDTModel wrapper (backbone + heads + losses)
+│   ├── dbm_backbone.py      # multi-scale DT (legacy backbone, kept for the dispatch)
+│   ├── dbm_v2.py            # DBM-Bid backbone: GranularityCalibrator + CausalTemporalFusionV2
+│   ├── method_model.py       # ResearchDBMModel wrapper (backbone + heads + losses)
 │   └── __init__.py
 ├── train/
 │   ├── train.py              # training entry point
@@ -115,7 +115,7 @@ The checkpoint is self-contained, so eval needs only the `.pt` file.
 ## Notes
 
 - `train/method_configs.py` returns `configs/dbm_bid.json` for any `--method` value,
-  so `--method dbm_bid` (or the internal name `msdt_v2_awr_beta5_fixed`) both work.
+  so `--method dbm_bid` (or the internal name `dbm_v2_awr_beta5_fixed`) both work.
 - The `.sh` scripts use placeholder data paths (`./data/auctionnet/...`); set
   `DATA_DIR` / `TRAFFIC_DIR` (or the `--data_dir` / `--traffic_dir` flags) to your
   local AuctionNet-Sparse data location before running.

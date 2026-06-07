@@ -12,7 +12,7 @@ ROOT_DIR = CURRENT_DIR.parent
 sys.path.insert(0, str(ROOT_DIR))
 sys.path.insert(0, str(CURRENT_DIR))
 
-from model import ResearchMSDTModel
+from model import ResearchDBMModel
 from common_utils import save_normalize_dict
 from dataset import MethodReplayBuffer
 from method_configs import build_method_config
@@ -190,7 +190,7 @@ def train_model(args):
     config.update(method_cfg)
     (save_dir / "train_config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    model = ResearchMSDTModel(config=config).to(device)
+    model = ResearchDBMModel(config=config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda steps: min((steps + 1) / 10000.0, 1.0))
 
@@ -424,7 +424,7 @@ def train_model(args):
     print(str(best_path))
 
 def main():
-    parser = argparse.ArgumentParser(description="Train new_msdt_method variants")
+    parser = argparse.ArgumentParser(description="Train new_dbm_method variants")
     parser.add_argument("--method", type=str, required=True)
     parser.add_argument("--data_dir", type=str, default="./data/auctionnet/rl_training_data")
     parser.add_argument("--train_periods", type=str, default="7,8,9,10,11,12,13")

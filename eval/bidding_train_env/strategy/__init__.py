@@ -1,1 +1,1 @@
-from .msdt_sampling_bidding_strategy import MSDTSamplingBiddingStrategy as PlayerBiddingStrategy
+from .dbm_sampling_bidding_strategy import DBMSamplingBiddingStrategy as PlayerBiddingStrategy

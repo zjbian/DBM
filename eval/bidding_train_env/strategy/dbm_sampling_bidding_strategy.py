@@ -10,13 +10,13 @@ CURRENT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = CURRENT_DIR.parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
-from model import ResearchMSDTModel
+from model import ResearchDBMModel
 
-class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
+class DBMSamplingBiddingStrategy(BaseBiddingStrategy):
     def __init__(
         self,
         budget=100,
-        name="MSDT-Sampling-PlayerStrategy",
+        name="DBM-Sampling-PlayerStrategy",
         cpa=2,
         category=1,
         load_dir=None,
@@ -24,14 +24,14 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
     ):
         super().__init__(budget, name, cpa, category)
         root_dir = Path(__file__).resolve().parents[2]
-        self.load_dir = Path(load_dir) if load_dir else root_dir / "saved_model" / "MSDT_sampling"
-        ckpt_path = self.load_dir / "msdt_sampling.pt"
+        self.load_dir = Path(load_dir) if load_dir else root_dir / "saved_model" / "DBM_sampling"
+        ckpt_path = self.load_dir / "dbm_sampling.pt"
         if not ckpt_path.exists():
             pts = sorted(self.load_dir.glob("*.pt"))
             if pts:
                 ckpt_path = pts[0]
         if not ckpt_path.exists():
-            raise FileNotFoundError(f"MSDT checkpoint not found in: {self.load_dir}")
+            raise FileNotFoundError(f"DBM checkpoint not found in: {self.load_dir}")
 
         ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.config = ckpt["config"]
@@ -51,7 +51,7 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
                 remapped[k] = v
         ckpt["model_state_dict"] = remapped
 
-        self.model = ResearchMSDTModel(config=self.config).to(self.device)
+        self.model = ResearchDBMModel(config=self.config).to(self.device)
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.model.eval()
 
