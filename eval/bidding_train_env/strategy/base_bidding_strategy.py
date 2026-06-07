@@ -23,11 +23,7 @@ class BaseBiddingStrategy(ABC):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def set_device(self, device):
-        """
-        设置计算设备
-        """
         self.device = device
-        # 如果子类有模型，也需要移动到指定设备
         if hasattr(self, 'model') and self.model is not None:
             self.model = self.model.to(device)
 

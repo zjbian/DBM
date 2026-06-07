@@ -8,7 +8,6 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, Sampler
 
-
 def _safe_parse_state(state_str, state_dim: int) -> np.ndarray:
     if pd.isna(state_str):
         return np.zeros((state_dim,), dtype=np.float32)
@@ -22,7 +21,6 @@ def _safe_parse_state(state_str, state_dim: int) -> np.ndarray:
     arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
     return arr
 
-
 class StratifiedTrajectorySampler(Sampler[int]):
     def __init__(
         self,
@@ -32,7 +30,7 @@ class StratifiedTrajectorySampler(Sampler[int]):
         num_samples: int,
         bucket_weights: Optional[List[float]] = None,
         seed: Optional[int] = None,
-        traj_weights: Optional[np.ndarray] = None,  # per-trajectory sampling weights (e.g. AWR)
+        traj_weights: Optional[np.ndarray] = None,
     ):
         self.bucket_indices = [list(bucket) for bucket in bucket_indices]
         self.batch_size = int(batch_size)
@@ -47,7 +45,6 @@ class StratifiedTrajectorySampler(Sampler[int]):
         if float(weights.sum()) <= 0:
             weights = np.ones_like(weights)
         self.bucket_weights = weights / weights.sum()
-        # Pre-compute per-bucket sampling probabilities from global traj_weights
         self.bucket_traj_probs: List[Optional[np.ndarray]] = []
         if traj_weights is not None:
             traj_weights = np.asarray(traj_weights, dtype=np.float64)
@@ -62,9 +59,6 @@ class StratifiedTrajectorySampler(Sampler[int]):
             self.bucket_traj_probs = [None] * len(self.bucket_indices)
 
     def __iter__(self):
-        # Use a deterministic RNG seeded from self.seed so that the same
-        # seed always produces the same sampling order, making training
-        # fully reproducible across runs.
         rng = np.random.RandomState(self.seed)
         all_indices = [idx for bucket in self.bucket_indices for idx in bucket]
         if not all_indices:
@@ -96,7 +90,6 @@ class StratifiedTrajectorySampler(Sampler[int]):
     def __len__(self):
         return self.num_samples
 
-
 class MethodReplayBuffer(Dataset):
     def __init__(
         self,
@@ -111,7 +104,7 @@ class MethodReplayBuffer(Dataset):
         reward_key: str = "reward",
         enable_weighted_sampling: bool = True,
         sampling_score_mode: str = "hybrid",
-        sampling_awr_beta: float = 20.0,   # AWR Boltzmann temperature: exp(score/beta)
+        sampling_awr_beta: float = 20.0,
         loss_weight_mode: str = "traj_score",
         loss_weight_min: float = 0.25,
         loss_weight_max: float = 4.0,
@@ -139,64 +132,33 @@ class MethodReplayBuffer(Dataset):
         tight_cpa_threshold: float = 70.0,
         tight_cpa_oversample: float = 2.0,
         use_hindsight_rtg: bool = False,
-        # ---------------------------------------------------------------
-        # 方案A: CPA-Scaled RTG
-        # 用 CPA 约束值对 RTG 做缩放，让紧约束广告主看到更低的 RTG 目标（更保守），
-        # 松约束广告主看到更高的 RTG 目标（更激进）。
-        # 三种缩放模式：linear / log / step
-        # ---------------------------------------------------------------
         use_cpa_scaled_rtg: bool = False,
-        cpa_scaled_rtg_mode: str = "linear",   # "linear" | "log" | "step"
-        cpa_scaled_rtg_median: float = 95.0,   # 数据集 CPA 中位数，用于归一化
-        # ---------------------------------------------------------------
-        # 方案B: Hindsight Truncation（违约轨迹前缀截断重标注）
-        # 对违约轨迹找到违约转折点，截断为合规前缀，作为额外训练样本。
-        # 大幅增加紧约束组的合规样本数量。
-        # ---------------------------------------------------------------
+        cpa_scaled_rtg_mode: str = "linear",
+        cpa_scaled_rtg_median: float = 95.0,
         use_hindsight_truncation: bool = False,
-        hindsight_truncation_cpa_thresh: float = 80.0,  # 只对 cpa <= 此值的违约轨迹截断
-        hindsight_truncation_min_len: int = 5,           # 截断后最短保留步数
-        # ---------------------------------------------------------------
-        # 方案C: Transition-Aware Sampling（违约边界过渡区采样）
-        # 在违约转折点附近专门采样，让模型学到"安全状态如何滑向违约"的边界行为。
-        # ---------------------------------------------------------------
+        hindsight_truncation_cpa_thresh: float = 80.0,
+        hindsight_truncation_min_len: int = 5,
         use_transition_sampling: bool = False,
-        transition_sample_prob: float = 0.30,    # Bucket2 中从 transition_starts 采样的概率
-        transition_window_before: int = 10,      # 转折点前多少步纳入 transition_starts
-        transition_window_after: int = 5,        # 转折点后多少步纳入 transition_starts
-        # ---------------------------------------------------------------
-        # 方案R1: Dense CPA-Progress Reward
-        # 在每步加入 CPA 进度辅助 reward，让 K=20 窗口内 RTG 每步都有约束相关信息。
-        # r_aux[t] = clip((cpa_target - cum_cpa[t]) / cpa_target, -1, 1)
-        # 零均值化后混入 RTG：rtg[t] = sum((reward + alpha*r_aux_centered)[t:])
-        # ---------------------------------------------------------------
+        transition_sample_prob: float = 0.30,
+        transition_window_before: int = 10,
+        transition_window_after: int = 5,
         use_cpa_progress_reward: bool = False,
-        cpa_progress_alpha: float = 0.1,          # 辅助 reward 混合系数
-        cpa_progress_zero_mean: bool = True,      # 是否零均值化（推荐 True）
-        cpa_progress_min_conv: int = 3,           # 累积转化 < 此值时衰减 r_aux（避免早期噪声）
-        # CPA-aware prefix sampling: different safe_prob per CPA group
+        cpa_progress_alpha: float = 0.1,
+        cpa_progress_zero_mean: bool = True,
+        cpa_progress_min_conv: int = 3,
         use_cpa_aware_prefix_prob: bool = False,
-        loose_cpa_threshold: float = 90.0,   # cpa > this → use loose_safe_prob
-        medium_cpa_threshold: float = 70.0,  # cpa in (medium, loose] → medium_safe_prob
-        loose_cpa_safe_prob: float = 0.41,   # loose CPA (≥90): allow more aggressive steps
-        medium_cpa_safe_prob: float = 0.62,  # medium CPA (70-90)
-        # tight CPA (≤70) uses safe_prefix_sample_prob unchanged
-        sampler_seed: Optional[int] = None,  # fix sampler RNG for reproducibility
-        # ---------------------------------------------------------------
-        # QATS: Quality-Aware Trajectory Sampling
-        # 用 quality_ratio = traj_score / reward_sum 动态决定 HT 截断与采样权重：
-        #   - quality_ratio < quality_ht_low_thresh  → 任意 CPA 组均截断（严重低质量轨迹）
-        #   - quality_ratio > quality_ht_high_thresh → 跳过截断（高质量轨迹不需要修复）
-        #   - 中间区间 → 沿用原始 hindsight_truncation_cpa_thresh 判断
-        # 采样权重（use_quality_aware_sampling）：钟形曲线在 quality_sample_center 处增强
-        # ---------------------------------------------------------------
+        loose_cpa_threshold: float = 90.0,
+        medium_cpa_threshold: float = 70.0,
+        loose_cpa_safe_prob: float = 0.41,
+        medium_cpa_safe_prob: float = 0.62,
+        sampler_seed: Optional[int] = None,
         use_quality_aware_ht: bool = False,
-        quality_ht_low_thresh: float = 0.25,   # 低于此 quality → 无条件 HT
-        quality_ht_high_thresh: float = 0.80,  # 高于此 quality → 跳过 HT
+        quality_ht_low_thresh: float = 0.25,
+        quality_ht_high_thresh: float = 0.80,
         use_quality_aware_sampling: bool = False,
-        quality_sample_center: float = 0.50,   # 钟形曲线中心（中等质量轨迹最有价值）
-        quality_sample_width: float = 0.25,    # 钟形曲线宽度
-        quality_sample_boost: float = 1.5,     # 中等质量轨迹的最大额外采样倍率
+        quality_sample_center: float = 0.50,
+        quality_sample_width: float = 0.25,
+        quality_sample_boost: float = 1.5,
     ):
         super().__init__()
         self.device = "cpu"
@@ -215,15 +177,12 @@ class MethodReplayBuffer(Dataset):
         self.rtg_noise_std = float(rtg_noise_std)
         self.use_demo_prefix = bool(use_demo_prefix)
         self.demo_prefix_len = int(demo_prefix_len)
-        # 方案A: CPA-Scaled RTG
         self.use_cpa_scaled_rtg = bool(use_cpa_scaled_rtg)
         self.cpa_scaled_rtg_mode = str(cpa_scaled_rtg_mode)
         self.cpa_scaled_rtg_median = float(cpa_scaled_rtg_median)
-        # 方案B: Hindsight Truncation
         self.use_hindsight_truncation = bool(use_hindsight_truncation)
         self.hindsight_truncation_cpa_thresh = float(hindsight_truncation_cpa_thresh)
         self.hindsight_truncation_min_len = int(hindsight_truncation_min_len)
-        # 方案C: Transition-Aware Sampling
         self.use_transition_sampling = bool(use_transition_sampling)
         self.transition_sample_prob = float(transition_sample_prob)
         self.transition_window_before = int(transition_window_before)
@@ -239,7 +198,6 @@ class MethodReplayBuffer(Dataset):
         self.tight_cpa_threshold = float(tight_cpa_threshold)
         self.tight_cpa_oversample = float(tight_cpa_oversample)
         self.use_hindsight_rtg = bool(use_hindsight_rtg)
-        # 方案R1: Dense CPA-Progress Reward
         self.use_cpa_progress_reward = bool(use_cpa_progress_reward)
         self.cpa_progress_alpha = float(cpa_progress_alpha)
         self.cpa_progress_zero_mean = bool(cpa_progress_zero_mean)
@@ -250,7 +208,6 @@ class MethodReplayBuffer(Dataset):
         self.loose_cpa_safe_prob = float(loose_cpa_safe_prob)
         self.medium_cpa_safe_prob = float(medium_cpa_safe_prob)
         self._sampler_seed = sampler_seed
-        # QATS
         self.use_quality_aware_ht = bool(use_quality_aware_ht)
         self.quality_ht_low_thresh = float(quality_ht_low_thresh)
         self.quality_ht_high_thresh = float(quality_ht_high_thresh)
@@ -288,9 +245,7 @@ class MethodReplayBuffer(Dataset):
         self.p_sample = self._build_sampling_probs()
         self._build_retrieval_bank()
         self._build_stratified_sampling()
-        # 方案B: 在分层采样建立之后，追加截断轨迹并重新分桶
         self._build_hindsight_truncated_trajectories()
-        # 截断轨迹追加后需要重新建立分层采样结构
         if self.use_hindsight_truncation:
             self._build_stratified_sampling()
 
@@ -360,14 +315,13 @@ class MethodReplayBuffer(Dataset):
         self.action_std = float(np.std(all_actions) + 1e-6)
         self.meta_mean = np.concatenate([np.mean(budgets, axis=0), np.mean(cpas, axis=0)], axis=0).astype(np.float32)
         self.meta_std = np.concatenate([np.std(budgets, axis=0) + 1e-6, np.std(cpas, axis=0) + 1e-6], axis=0).astype(np.float32)
-        # CPA-state feature normalization stats
         if self.use_cpa_state_features:
             all_cpa_ratios = []
             for traj in self.trajectories:
-                cr = traj["cumulative_reward"]  # (T, 1)
-                cc = traj["cumulative_cost"]    # (T, 1)
+                cr = traj["cumulative_reward"]
+                cc = traj["cumulative_cost"]
                 cpa_c = float(traj["cpa_constraint"])
-                cpa_ratio = cc / (cpa_c * (cr + 1.0))  # (T, 1)
+                cpa_ratio = cc / (cpa_c * (cr + 1.0))
                 all_cpa_ratios.append(cpa_ratio)
             all_cpa_ratios = np.concatenate(all_cpa_ratios, axis=0)
             self.cpa_ratio_mean = float(np.mean(all_cpa_ratios))
@@ -398,14 +352,11 @@ class MethodReplayBuffer(Dataset):
         elif self.sampling_score_mode == "traj_score":
             scores = traj_component
         elif self.sampling_score_mode == "awr":
-            # Boltzmann weighting: p(τ) ∝ exp(score(τ) / β)
-            # Normalized by std to avoid exp overflow; β controls sharpness
             raw = np.asarray([t["traj_score"] for t in self.trajectories], dtype=np.float32)
             raw_norm = (raw - raw.max()) / (raw.std() + 1e-6)
             scores = np.exp(raw_norm / self.sampling_awr_beta)
         else:
             scores = np.sqrt(reward_component * traj_component)
-        # QATS: 钟形质量权重，对中等质量轨迹（quality_ratio≈0.5）给予额外采样倍率
         if self.use_quality_aware_sampling:
             quality_arr = np.asarray(
                 [traj.get("quality_ratio", 0.5) for traj in self.trajectories], dtype=np.float32
@@ -429,7 +380,6 @@ class MethodReplayBuffer(Dataset):
             traj["remaining_budget_seq"] = remaining_budget
             traj["quality_ratio"] = float(traj["traj_score"] / max(traj["reward_sum"], 1.0)) if traj["reward_sum"] > 0 else 0.0
             quality_ratios.append(traj["quality_ratio"])
-            # CPA compliance: did this trajectory violate the CPA constraint?
             total_cost = float(traj["cumulative_cost"][-1, 0])
             total_reward = float(traj["cumulative_reward"][-1, 0])
             actual_cpa = total_cost / max(total_reward, 1.0)
@@ -461,10 +411,8 @@ class MethodReplayBuffer(Dataset):
         self.quality_std = float(np.std(quality_arr) + 1e-6) if quality_arr.size > 0 else 1.0
         for traj in self.trajectories:
             traj["quality_target"] = float(1.0 + 0.5 * ((traj["quality_ratio"] - self.quality_mean) / self.quality_std))
-            # AWSM: per-step advantage = reward[t] - mean_reward_of_traj
-            # advantage > 0 → this step is better than average → upweight
             mean_r = float(np.mean(traj["rewards_raw"])) if len(traj["rewards_raw"]) > 0 else 0.0
-            traj["step_advantage"] = (traj["rewards_raw"].reshape(-1) - mean_r).astype(np.float32)  # (T,)
+            traj["step_advantage"] = (traj["rewards_raw"].reshape(-1) - mean_r).astype(np.float32)
 
     def _build_retrieval_bank(self):
         queries = np.stack([traj["summary_query"] for traj in self.trajectories], axis=0).astype(np.float32)
@@ -505,9 +453,6 @@ class MethodReplayBuffer(Dataset):
             traj["risky_start_indices"] = risky_starts
             traj["late_start_indices"] = late_starts
 
-            # 方案C: Transition-Aware Sampling
-            # 找到违约转折点，在其前后窗口内定义 transition_starts
-            # 让模型学到"安全状态如何滑向违约"的边界行为
             if self.use_transition_sampling and traj.get("cpa_violated", False):
                 t_star = self._find_violation_step(traj)
                 t_before = getattr(self, "transition_window_before", 10)
@@ -534,86 +479,49 @@ class MethodReplayBuffer(Dataset):
             self.stratified_bucket_indices[bucket].append(idx)
 
     def _find_violation_step(self, traj: Dict) -> int:
-        """
-        找到轨迹中第一次违反 CPA 约束的时间步 t*。
-        违约条件：cumulative_cost[t] > cpa_constraint × (cumulative_reward[t] + 1)
-        返回 t*，如果整条轨迹都合规则返回 len(traj)。
-        """
         cpa_c = float(traj["cpa_constraint"])
-        cum_cost = traj["cumulative_cost"].reshape(-1)    # (T,)
-        cum_reward = traj["cumulative_reward"].reshape(-1)  # (T,)
+        cum_cost = traj["cumulative_cost"].reshape(-1)
+        cum_reward = traj["cumulative_reward"].reshape(-1)
         allowance = cpa_c * (cum_reward + 1.0)
         violated = cum_cost > allowance
         idxs = np.where(violated)[0]
         return int(idxs[0]) if len(idxs) > 0 else len(cum_cost)
 
     def _compute_cpa_progress_reward(self, traj: Dict) -> np.ndarray:
-        """
-        方案R1：计算 CPA 进度辅助 reward。
-
-        对轨迹的每一步计算 CPA 余量比例：
-          r_aux[t] = clip((cpa_target - cum_cpa[t]) / cpa_target, -1, 1)
-        其中 cum_cpa[t] = cum_cost[t] / max(cum_conv[t], 1)
-
-        早期衰减：当 cum_conv[t] < min_conv 时，r_aux[t] 被衰减，避免早期噪声。
-        零均值化（可选）：r_aux -= mean(r_aux)，使 RTG 总量不变，只改变步间分布。
-
-        返回：r_aux (T, 1) 数组，与 rewards_raw 同形状。
-        """
         cpa_target = float(traj["cpa_constraint"])
-        cum_cost = traj["cumulative_cost"].reshape(-1)      # (T,)
-        cum_reward = traj["cumulative_reward"].reshape(-1)  # (T,)
+        cum_cost = traj["cumulative_cost"].reshape(-1)
+        cum_reward = traj["cumulative_reward"].reshape(-1)
         T = len(cum_cost)
 
-        # 计算每步的实际 CPA
-        cum_cpa = cum_cost / np.maximum(cum_reward, 1.0)  # (T,)
+        cum_cpa = cum_cost / np.maximum(cum_reward, 1.0)
 
-        # CPA 余量比例：正值 = 合规余量，负值 = 超标
-        cpa_slack = (cpa_target - cum_cpa) / max(cpa_target, 1e-6)  # (T,)
-        r_aux = np.clip(cpa_slack, -1.0, 1.0).astype(np.float32)  # (T,)
+        cpa_slack = (cpa_target - cum_cpa) / max(cpa_target, 1e-6)
+        r_aux = np.clip(cpa_slack, -1.0, 1.0).astype(np.float32)
 
-        # 早期衰减：cum_conv < min_conv 时衰减
         min_conv = self.cpa_progress_min_conv
-        conv_gate = np.minimum(cum_reward / max(float(min_conv), 1.0), 1.0)  # (T,)
+        conv_gate = np.minimum(cum_reward / max(float(min_conv), 1.0), 1.0)
         r_aux = r_aux * conv_gate
 
-        # 零均值化：使 sum(r_aux) ≈ 0，RTG 总量不变
         if self.cpa_progress_zero_mean:
             r_aux = r_aux - np.mean(r_aux)
 
-        return r_aux.reshape(-1, 1).astype(np.float32)  # (T, 1)
+        return r_aux.reshape(-1, 1).astype(np.float32)
 
     def _build_hindsight_truncated_trajectories(self):
-        """
-        方案B：对违约轨迹做前缀截断重标注。
-
-        对每条满足条件的违约轨迹（cpa_constraint <= hindsight_truncation_cpa_thresh）：
-        1. 找到违约转折点 t*
-        2. 截断轨迹到 [0, t*-1]（合规前缀）
-        3. 为截断轨迹重新计算 traj_score（前缀合规，penalty=1.0）
-        4. 将截断轨迹追加到 self.trajectories，并归入 Bucket 1
-
-        截断轨迹的标识：traj["is_truncated"] = True，traj["truncated_from"] = 原始轨迹索引
-        """
         if not self.use_hindsight_truncation:
             return
 
         new_trajs = []
         for orig_idx, traj in enumerate(self.trajectories):
-            # 只处理违约轨迹
             if not traj.get("cpa_violated", False):
                 continue
-            # QATS 动态阈值 vs. 原始固定 CPA 阈值
             if self.use_quality_aware_ht:
                 quality = traj.get("quality_ratio", 0.5)
                 if quality >= self.quality_ht_high_thresh:
-                    # 高质量违约轨迹（轻微违约）：跳过截断，保留完整轨迹
                     continue
                 if quality < self.quality_ht_low_thresh:
-                    # 严重低质量：任意 CPA 组均截断
                     pass
                 else:
-                    # 中等质量：沿用原始 CPA 阈值
                     if float(traj["cpa_constraint"]) > self.hindsight_truncation_cpa_thresh:
                         continue
             else:
@@ -621,18 +529,14 @@ class MethodReplayBuffer(Dataset):
                     continue
 
             t_star = self._find_violation_step(traj)
-            # 截断后长度必须满足最小步数要求
             if t_star < self.hindsight_truncation_min_len:
                 continue
 
-            # 截断到 [0, t_star-1]
-            T_trunc = t_star  # 截断后的轨迹长度
+            T_trunc = t_star
 
-            # 截断后的 traj_score：前缀合规，penalty=1.0，score = sum(sparse_rewards[:t_star])
             trunc_reward_sum = float(np.sum(traj["sparse_rewards"][:T_trunc]))
-            trunc_traj_score = trunc_reward_sum  # penalty=1.0，score=reward_sum
+            trunc_traj_score = trunc_reward_sum
 
-            # 构造截断轨迹（共享原始数组的切片，不复制大数组）
             trunc_traj = {
                 "period": traj["period"],
                 "advertiser_id": traj["advertiser_id"],
@@ -649,15 +553,11 @@ class MethodReplayBuffer(Dataset):
                 "reward_sum": trunc_reward_sum,
                 "cumulative_reward": traj["cumulative_reward"][:T_trunc],
                 "cumulative_cost": traj["cumulative_cost"][:T_trunc],
-                # 截断轨迹标识
                 "is_truncated": True,
                 "truncated_from": orig_idx,
-                # 截断轨迹不违约（前缀合规）
                 "cpa_violated": False,
             }
 
-            # 补全 _finalize_trajectory_features 产生的字段
-            # 使用已有的归一化统计（state_mean/std/action_mean/std/meta_mean/std）
             trunc_traj["states_norm"] = (
                 (trunc_traj["states_raw"] - self.state_mean) / self.state_std
             ).astype(np.float32)
@@ -671,7 +571,6 @@ class MethodReplayBuffer(Dataset):
                 (trunc_traj["meta_raw"] - self.meta_mean) / self.meta_std
             ).astype(np.float32)
 
-            # remaining_budget_seq：每步出价前的剩余预算
             costs = trunc_traj["costs_raw"].reshape(-1)
             spent_prefix = np.concatenate([[0.0], np.cumsum(costs[:-1])], axis=0)
             remaining_budget = np.clip(
@@ -679,7 +578,6 @@ class MethodReplayBuffer(Dataset):
             ).astype(np.float32).reshape(-1, 1)
             trunc_traj["remaining_budget_seq"] = remaining_budget
 
-            # quality_ratio / quality_target
             trunc_traj["quality_ratio"] = float(
                 trunc_traj["traj_score"] / max(trunc_traj["reward_sum"], 1.0)
             ) if trunc_traj["reward_sum"] > 0 else 0.0
@@ -689,13 +587,11 @@ class MethodReplayBuffer(Dataset):
                 )
             )
 
-            # step_advantage
             mean_r = float(np.mean(trunc_traj["rewards_raw"])) if len(trunc_traj["rewards_raw"]) > 0 else 0.0
             trunc_traj["step_advantage"] = (
                 trunc_traj["rewards_raw"].reshape(-1) - mean_r
             ).astype(np.float32)
 
-            # summary_query / retrieval_context（用于 retrieval bank，截断轨迹用近似值）
             summary = np.concatenate(
                 [np.mean(trunc_traj["states_norm"], axis=0), trunc_traj["meta_norm"]], axis=0
             )
@@ -711,10 +607,8 @@ class MethodReplayBuffer(Dataset):
                 trunc_traj["meta_norm"][1],
             ], dtype=np.float32)
             trunc_traj["retrieval_context"] = retrieval_ctx
-            # retrieval_context_avg：暂时用自身（后续 _build_retrieval_bank 不会重跑）
             trunc_traj["retrieval_context_avg"] = retrieval_ctx.copy()
 
-            # expert_actions_norm：用全局 expert_action_proto 的前 T_trunc 步
             tlen = min(self.max_ep_len, T_trunc)
             trunc_traj["expert_actions_norm"] = self.expert_action_proto[:tlen].copy()
 
@@ -723,12 +617,8 @@ class MethodReplayBuffer(Dataset):
         if not new_trajs:
             return
 
-        # 追加到 trajectories 列表
         self.trajectories.extend(new_trajs)
 
-        # 重新计算归一化统计（新轨迹改变了均值/方差）
-        # 注意：只重新计算 loss_weights 和 sampling_probs，不重新计算 state_mean/std
-        # （state 归一化统计保持不变，避免破坏已有的归一化）
         self.loss_weights = self._build_loss_weights()
         self.p_sample = self._build_sampling_probs()
 
@@ -791,8 +681,6 @@ class MethodReplayBuffer(Dataset):
     def build_train_sampler(self, *, batch_size: int, num_samples: int):
         if not self.use_stratified_prefix_sampling:
             return None
-        # 方向C: tight CPA 高质量轨迹 oversample
-        # 用 per-trajectory 采样权重替代纯分桶，让 tight CPA 组的好轨迹有更高概率被选中
         if self.tight_cpa_oversample > 1.0:
             weights = np.ones(len(self.trajectories), dtype=np.float64)
             for idx, traj in enumerate(self.trajectories):
@@ -801,14 +689,9 @@ class MethodReplayBuffer(Dataset):
                 if is_tight and is_hq:
                     weights[idx] = self.tight_cpa_oversample
             weights = weights / weights.sum()
-            # 用加权随机采样器，保留分桶结构的同时提升 tight CPA 代表性
             num_total = int(np.ceil(num_samples / batch_size)) * batch_size
             sampled = np.random.choice(len(self.trajectories), size=num_total, replace=True, p=weights).tolist()
             return iter(sampled[:num_samples])
-        # When sampling_score_mode="awr", pass per-trajectory AWR weights into the
-        # stratified sampler so that within each quality bucket, higher-scoring
-        # trajectories are sampled more frequently (fixing the prior bug where
-        # StratifiedTrajectorySampler silently overrode WeightedRandomSampler).
         awr_traj_weights = None
         if self.enable_weighted_sampling and self.sampling_score_mode == "awr":
             raw = np.asarray([t["traj_score"] for t in self.trajectories], dtype=np.float64)
@@ -834,8 +717,6 @@ class MethodReplayBuffer(Dataset):
         late_pool = traj.get("late_start_indices", np.asarray([], dtype=np.int64))
         transition_pool = traj.get("transition_start_indices", np.asarray([], dtype=np.int64))
 
-        # CPA-aware safe_prob: loose CPA groups (cpa≥90) have more bidding headroom,
-        # so we allow more aggressive (risky) start positions to prevent over-conservatism.
         if self.use_cpa_aware_prefix_prob:
             cpa_c = float(traj["cpa_constraint"])
             if cpa_c > self.loose_cpa_threshold:
@@ -843,14 +724,11 @@ class MethodReplayBuffer(Dataset):
             elif cpa_c > self.medium_cpa_threshold:
                 effective_safe_prob = self.medium_cpa_safe_prob
             else:
-                effective_safe_prob = self.safe_prefix_sample_prob  # tight CPA unchanged
+                effective_safe_prob = self.safe_prefix_sample_prob
         else:
             effective_safe_prob = self.safe_prefix_sample_prob
 
         choose_safe = random.random() < effective_safe_prob
-        # 方案C: Transition-Aware Sampling
-        # Bucket 2（高奖励违约轨迹）中，以 transition_sample_prob 概率从违约边界附近采样，
-        # 让模型学到"安全状态如何滑向违约"的边界行为
         if (self.use_transition_sampling
                 and bucket == 2
                 and transition_pool.size > 0
@@ -888,23 +766,18 @@ class MethodReplayBuffer(Dataset):
         timesteps[timesteps >= self.max_ep_len] = self.max_ep_len - 1
 
         reward_rtg = self.discount_cumsum(traj["rewards_raw"][start_t:], gamma=1.0)[: len(states_norm) + 1]
-        # 方案R1: Dense CPA-Progress Reward
-        # 将辅助 reward 加到 reward 后重新计算 RTG，使窗口内每步 RTG 都有约束信息
         if self.use_cpa_progress_reward:
-            r_aux_full = self._compute_cpa_progress_reward(traj)  # (T_full, 1)
+            r_aux_full = self._compute_cpa_progress_reward(traj)
             augmented_reward = traj["rewards_raw"][start_t:] + self.cpa_progress_alpha * r_aux_full[start_t:]
             reward_rtg = self.discount_cumsum(augmented_reward, gamma=1.0)[: len(states_norm) + 1]
         if len(reward_rtg) <= len(states_norm):
             reward_rtg = np.concatenate([reward_rtg, np.zeros((1, 1), dtype=np.float32)], axis=0)
         if self.return_dim > 1:
             if getattr(self, "use_cpa_slack_rtg", False):
-                # CPA-Slack RTG: 未来轨迹的 CPA 盈余
-                # cpa_slack[t] = cpa_constraint × reward_rtg[t] - (total_cost - cumulative_cost[t])
-                # 正值 = CPA 可行，负值 = CPA 违规
                 cpa_c = float(traj["cpa_constraint"])
                 total_cost = float(np.sum(traj["costs_raw"]))
                 future_cost = total_cost - traj["cumulative_cost"][start_t:start_t + len(states_norm)]
-                cpa_slack = cpa_c * reward_rtg[:len(states_norm)] - future_cost  # (tlen, 1)
+                cpa_slack = cpa_c * reward_rtg[:len(states_norm)] - future_cost
                 cpa_slack_rtg = np.concatenate([cpa_slack, cpa_slack[-1:]], axis=0)
                 rtg = np.concatenate([reward_rtg, cpa_slack_rtg], axis=-1)
             else:
@@ -913,46 +786,30 @@ class MethodReplayBuffer(Dataset):
         else:
             rtg = reward_rtg
 
-        # Score-RTG: scale RTG by penalty² = traj_score / reward_sum
-        # This directly encodes CPA compliance into the training signal
         if self.use_score_rtg and float(traj["reward_sum"]) > 0:
             quality_ratio = float(traj["traj_score"]) / max(float(traj["reward_sum"]), 1.0)
             quality_ratio = float(np.clip(quality_ratio, 0.1, 1.0))
             rtg = rtg * quality_ratio
 
-        # 方案A: CPA-Scaled RTG
-        # 用 CPA 约束值对 RTG 做缩放，让紧约束广告主看到更低的 RTG 目标（更保守），
-        # 松约束广告主看到更高的 RTG 目标（更激进）。
-        # 在 Score-RTG 之后应用，只缩放 reward 维度（dim 0）。
         if self.use_cpa_scaled_rtg:
             cpa_c = float(traj["cpa_constraint"])
             median = self.cpa_scaled_rtg_median
             mode = self.cpa_scaled_rtg_mode
             if mode == "linear":
-                # 线性缩放：CPA=60→0.63x，CPA=95→1.0x，CPA=130→1.37x
                 cpa_scale = cpa_c / median
             elif mode == "log":
-                # 对数缩放：变化幅度更温和
-                # CPA=60→0.92x，CPA=95→1.0x，CPA=130→1.07x
                 cpa_scale = float(np.log(cpa_c + 1.0) / np.log(median + 1.0))
-            else:  # "step"
-                # 分段缩放：三个离散值，最容易调试
+            else:
                 if cpa_c <= 70.0:
                     cpa_scale = 0.7
                 elif cpa_c <= 100.0:
                     cpa_scale = 1.0
                 else:
                     cpa_scale = 1.3
-            # 只缩放 reward RTG（dim 0），不影响 budget/CPA-slack RTG（dim 1）
             rtg_scaled = rtg.copy()
             rtg_scaled[:, 0:1] = rtg[:, 0:1] * float(cpa_scale)
             rtg = rtg_scaled
 
-        # 方向A: Hindsight RTG Relabeling for violated trajectories
-        # 对违约轨迹，用反事实 RTG 替代原始 RTG：
-        # 估算"如果出价整体缩小到刚好合规"时的 score，作为 hindsight 目标
-        # 这让模型从违约轨迹里学到"稍微保守一点就能合规"的信号
-        # 只对 tight CPA 组（cpa_constraint < tight_cpa_threshold）的违约轨迹生效
         if (getattr(self, "use_hindsight_rtg", False)
                 and traj.get("cpa_violated", False)
                 and float(traj["cpa_constraint"]) < self.tight_cpa_threshold):
@@ -960,36 +817,24 @@ class MethodReplayBuffer(Dataset):
             total_reward = float(traj["reward_sum"])
             total_cost = float(np.sum(traj["costs_raw"]))
             if total_reward > 0 and total_cost > 0:
-                # 合规所需的最大 cost = cpa_constraint * total_reward
                 max_compliant_cost = cpa_c * total_reward
-                # 缩放比例：如果按此比例缩小出价，cost 刚好合规
                 scale_ratio = float(np.clip(max_compliant_cost / total_cost, 0.5, 1.0))
-                # 反事实 reward 估算：reward 与出价正相关，缩小出价会损失部分 reward
-                # 保守估计：reward 按 sqrt(scale_ratio) 缩放（次线性，因为赢得拍卖减少但单次价值不变）
                 cf_reward = total_reward * float(np.sqrt(scale_ratio))
-                # 反事实 score：合规时 penalty=1，score = cf_reward
                 cf_score = cf_reward
                 cf_quality_ratio = float(np.clip(cf_score / max(total_reward, 1.0), 0.1, 1.0))
-                # 用反事实 quality_ratio 替代原始（已被 Score-RTG 压缩的）RTG
-                # 先撤销 Score-RTG 的缩放，再用 cf_quality_ratio 重新缩放
                 if self.use_score_rtg and quality_ratio > 0:
                     rtg = rtg / quality_ratio * cf_quality_ratio
                 else:
                     rtg = rtg * cf_quality_ratio
 
-        # Dense Reward Shaping: augment RTG with pValue cumulative signal
-        # pValue (state dim 12) serves as a proxy for conversion quality at each step
-        # dense_rtg[t] = rtg[t] + dense_reward_scale * sum(pValue[t:]) / scale
         if self.use_dense_reward_shaping:
-            pvalue_seq = traj["states_raw"][start_t:, 12].reshape(-1, 1).astype(np.float32)  # (T_full, 1)
+            pvalue_seq = traj["states_raw"][start_t:, 12].reshape(-1, 1).astype(np.float32)
             pvalue_rtg = self.discount_cumsum(pvalue_seq, gamma=1.0)[: len(states_norm) + 1]
             if len(pvalue_rtg) <= len(states_norm):
                 pvalue_rtg = np.concatenate([pvalue_rtg, np.zeros((1, 1), dtype=np.float32)], axis=0)
-            pvalue_rtg_norm = pvalue_rtg / (float(np.max(np.abs(pvalue_rtg))) + 1e-6)  # normalize to [-1, 1]
+            pvalue_rtg_norm = pvalue_rtg / (float(np.max(np.abs(pvalue_rtg))) + 1e-6)
             rtg = rtg + self.dense_reward_scale * pvalue_rtg_norm
 
-        # RTG Noise Augmentation: add Gaussian noise to RTG during training
-        # Makes model robust to RTG scale variations → reduces seed variance
         if self.use_rtg_noise:
             noise = np.random.randn(*rtg.shape).astype(np.float32) * self.rtg_noise_std
             rtg = rtg + noise
@@ -998,13 +843,12 @@ class MethodReplayBuffer(Dataset):
         heuristics_norm = ((heuristics_raw - self.action_mean) / self.action_std).astype(np.float32)
         tlen = len(states_norm)
 
-        # CPA-state feature augmentation: append cpa_ratio to state
         if self.use_cpa_state_features:
             cpa_c = float(traj["cpa_constraint"])
-            cpa_ratio_raw = cumulative_cost / (cpa_c * (cumulative_reward + 1.0))  # (tlen, 1)
+            cpa_ratio_raw = cumulative_cost / (cpa_c * (cumulative_reward + 1.0))
             cpa_ratio_norm_arr = ((cpa_ratio_raw - self.cpa_ratio_mean) / self.cpa_ratio_std).astype(np.float32)
-            states_norm = np.concatenate([states_norm, cpa_ratio_norm_arr], axis=-1)  # (tlen, state_dim)
-            states_raw = np.concatenate([states_raw, cpa_ratio_raw], axis=-1)          # (tlen, state_dim)
+            states_norm = np.concatenate([states_norm, cpa_ratio_norm_arr], axis=-1)
+            states_raw = np.concatenate([states_raw, cpa_ratio_raw], axis=-1)
 
         budget_gap = states_raw[:, 1] - states_raw[:, 0]
         route_targets = np.ones((tlen,), dtype=np.int64)
@@ -1019,20 +863,14 @@ class MethodReplayBuffer(Dataset):
         )
         prefix_feasibility = (cumulative_cost <= feasible_allowance).astype(np.float32)
 
-        # CPA compliance filter: for tight-constraint violating trajectories,
-        # zero out prefix_feasibility so pfeas_weight suppresses imitation on all steps.
-        # The model still sees these trajectories (for RTG learning) but won't imitate their actions.
         if (self.use_cpa_compliance_filter
                 and traj.get("cpa_violated", False)
                 and float(traj["cpa_constraint"]) <= self.cpa_compliance_tight_threshold):
             prefix_feasibility = np.zeros_like(prefix_feasibility)
 
-        # Pfeas-RTG: per-step scale RTG by prefix feasibility
-        # feasible step → full RTG; infeasible step → 0.3× RTG
-        # Teaches model: "when CPA already violated, expect lower future returns → bid less"
         if self.use_pfeas_rtg_scale:
-            pfeas_scale = (0.3 + 0.7 * prefix_feasibility)  # (tlen, 1)
-            rtg_body = rtg[:-1] * pfeas_scale   # apply to all but last padding step
+            pfeas_scale = (0.3 + 0.7 * prefix_feasibility)
+            rtg_body = rtg[:-1] * pfeas_scale
             rtg = np.concatenate([rtg_body, rtg[-1:]], axis=0)
 
         pad = self.K - tlen
@@ -1051,13 +889,11 @@ class MethodReplayBuffer(Dataset):
         next_costs = np.concatenate([costs_scaled[1:], costs_scaled[-1:]], axis=0)
         next_budget_left = _pad2(next_budget_left, 1)
         rtg = np.concatenate([np.zeros((pad, self.return_dim), dtype=np.float32), rtg], axis=0)
-        # 方案D: 用 cpa_constraint 作为 per-traj scale，让 RTG 归一化到"相对于CPA约束的期望回报"
         rtg_scale = float(traj["cpa_constraint"]) if self.use_cpa_normalized_rtg else self.scale
         rtg[:, 0:1] = rtg[:, 0:1] / rtg_scale
         if self.return_dim > 1:
             rtg[:, 1:2] = rtg[:, 1:2] / self.scale
             if getattr(self, "use_cpa_slack_rtg", False):
-                # CPA-slack 值域较大，归一化后裁剪至合理范围
                 rtg[:, 1:2] = np.clip(rtg[:, 1:2], -10.0, 10.0)
         dones = np.concatenate([np.ones((pad,), dtype=np.int64) * 2, dones], axis=0)
         timesteps = np.concatenate([np.zeros((pad,), dtype=np.int64), timesteps], axis=0)
@@ -1067,14 +903,9 @@ class MethodReplayBuffer(Dataset):
         prefix_feasibility = _pad2(prefix_feasibility, 1)
         route_targets = np.concatenate([np.zeros((pad,), dtype=np.int64), route_targets], axis=0)
 
-        # AWSM: per-step advantage weight
-        # advantage[t] = reward[t] - mean_reward → upweight good steps, downweight bad steps
-        step_adv = traj["step_advantage"][start_t:end_t]  # (tlen,)
-        step_adv = np.concatenate([np.zeros(pad, dtype=np.float32), step_adv], axis=0)  # (K,)
+        step_adv = traj["step_advantage"][start_t:end_t]
+        step_adv = np.concatenate([np.zeros(pad, dtype=np.float32), step_adv], axis=0)
 
-        # Demo Prefix: prepend a high-quality trajectory snippet as in-context demonstration
-        # The demo states/actions/rtg are prepended to the context window
-        # This implements cross-trajectory in-context learning
         demo_states = np.zeros((self.demo_prefix_len, self.state_dim), dtype=np.float32)
         demo_actions = np.zeros((self.demo_prefix_len, self.act_dim), dtype=np.float32)
         demo_rtg = np.zeros((self.demo_prefix_len, self.return_dim), dtype=np.float32)
@@ -1087,7 +918,6 @@ class MethodReplayBuffer(Dataset):
             d_len = d_end - d_start
             demo_states[:d_len] = demo_traj["states_norm"][d_start:d_end]
             demo_actions[:d_len] = demo_traj["actions_norm"][d_start:d_end]
-            # demo RTG: use score-scaled RTG of the demo traj
             demo_rtg_full = self.discount_cumsum(demo_traj["rewards_raw"][d_start:], gamma=1.0)
             demo_rtg_slice = demo_rtg_full[:d_len] / self.scale
             if self.use_score_rtg and float(demo_traj["reward_sum"]) > 0:

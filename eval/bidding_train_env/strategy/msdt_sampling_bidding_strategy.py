@@ -12,7 +12,6 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from model import ResearchMSDTModel
 
-
 class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
     def __init__(
         self,
@@ -26,7 +25,6 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
         super().__init__(budget, name, cpa, category)
         root_dir = Path(__file__).resolve().parents[2]
         self.load_dir = Path(load_dir) if load_dir else root_dir / "saved_model" / "MSDT_sampling"
-        # Try method-named checkpoint first, fall back to legacy msdt_sampling.pt
         ckpt_path = self.load_dir / "msdt_sampling.pt"
         if not ckpt_path.exists():
             pts = sorted(self.load_dir.glob("*.pt"))
@@ -38,15 +36,11 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
         ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.config = ckpt["config"]
 
-        # --- backward-compat: infer n_inner from checkpoint weights ---
         sd = ckpt["model_state_dict"]
         mlp_key = "backbone.transformer.0.mlp.0.weight"
         if mlp_key in sd and "n_inner" not in self.config:
             self.config["n_inner"] = sd[mlp_key].shape[0]
 
-        # --- backward-compat: remap old Sequential predict_action keys ---
-        # Old code: predict_action = nn.Sequential([Linear]) → keys end in ".0.weight"/".0.bias"
-        # New code: predict_action = nn.Linear → keys end in ".weight"/".bias"
         remapped = {}
         for k, v in sd.items():
             if k == "backbone.predict_action.0.weight":
@@ -86,13 +80,10 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
             if target_return_override is not None
             else float(self.config.get("target_return", 50.0))
         )
-        # CA-TR: per-CPA-group target return mapping (from oracle analysis on msdt_v2_allcons_s3)
-        # Best TR per group: CPA=60→50, 70→50, 80→36, 90→50, 100→36, 110→44, 120→50, 130→32
-        self.use_ca_tr = False  # enabled via enable_ca_tr()
+        self.use_ca_tr = False
         self._ca_tr_map = {60: 50, 70: 50, 80: 36, 90: 50, 100: 36, 110: 44, 120: 50, 130: 32}
 
     def enable_ca_tr(self, enabled: bool = True):
-        """启用 CA-TR：根据广告主 CPA 约束动态选择 target_return。"""
         self.use_ca_tr = enabled
 
     def set_device(self, device):
@@ -103,7 +94,6 @@ class MSDTSamplingBiddingStrategy(BaseBiddingStrategy):
         self.remaining_budget = self.budget
         self.total_cost = 0.0
         self.total_conversion = 0.0
-        # CA-TR: 在每个 episode 开始时根据 CPA 约束更新 target_return
         if self.use_ca_tr:
             cpa_key = min(self._ca_tr_map.keys(), key=lambda k: abs(k - self.cpa))
             self.target_return = float(self._ca_tr_map[cpa_key])

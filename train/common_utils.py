@@ -3,7 +3,6 @@ import os
 import pickle
 import numpy as np
 
-
 def normalize_state(training_data, state_dim, normalize_indices):
     """
     Normalize features for reinforcement learning.
@@ -44,7 +43,6 @@ def normalize_state(training_data, state_dim, normalize_indices):
             training_data[f'normalize_{next_state_col}'] = (
                                                                    training_data[next_state_col] - min_val) / (
                                                                    max_val - min_val + 0.01)
-            # 0.01 error too large?
         else:
             training_data[f'normalize_{state_col}'] = training_data[state_col]
             training_data[f'normalize_{next_state_col}'] = training_data[next_state_col]
@@ -55,7 +53,6 @@ def normalize_state(training_data, state_dim, normalize_indices):
         lambda row: tuple(row[f'normalize_{next_state_col}'] for next_state_col in next_state_columns), axis=1)
 
     return stats
-
 
 def normalize_reward(training_data, reward_type):
     """
@@ -74,7 +71,6 @@ def normalize_reward(training_data, reward_type):
                                             reward_type].min()) / reward_range
     return training_data["normalize_reward"]
 
-
 def save_normalize_dict(normalize_dict, save_dir):
     """
     Save the normalization dictionary to a Pickle file.
@@ -88,7 +84,6 @@ def save_normalize_dict(normalize_dict, save_dir):
     save_path = os.path.join(save_dir, 'normalize_dict.pkl')
     with open(save_path, 'wb') as file:
         pickle.dump(normalize_dict, file)
-
 
 if __name__ == '__main__':
     test_data = {

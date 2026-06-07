@@ -17,13 +17,11 @@ from common_utils import save_normalize_dict
 from dataset import MethodReplayBuffer
 from method_configs import build_method_config
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(name)s] [%(filename)s(%(lineno)d)] [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-
 
 def load_method_overrides(args) -> dict:
     overrides = {}
@@ -33,7 +31,6 @@ def load_method_overrides(args) -> dict:
     if args.config_override_json:
         overrides.update(json.loads(args.config_override_json))
     return overrides
-
 
 def train_model(args):
     import random, numpy as np
@@ -55,9 +52,6 @@ def train_model(args):
         logger.info("Method overrides: %s", json.dumps(method_overrides, ensure_ascii=False, indent=2))
     device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
 
-    # Base CSV state dim comes from args (default 16).
-    # If use_cpa_state_features, the replay buffer appends cpa_ratio (+1).
-    # effective_state_dim = base + 1 for model construction.
     base_state_dim = int(method_cfg.get("base_state_dim", args.state_dim))
     use_cpa_state = bool(method_cfg.get("use_cpa_state_features", False))
     effective_state_dim = base_state_dim + (1 if use_cpa_state else 0)
@@ -106,25 +100,20 @@ def train_model(args):
         medium_cpa_threshold=float(method_cfg.get("medium_cpa_threshold", 70.0)),
         loose_cpa_safe_prob=float(method_cfg.get("loose_cpa_safe_prob", 0.41)),
         medium_cpa_safe_prob=float(method_cfg.get("medium_cpa_safe_prob", 0.62)),
-        # 方案A: CPA-Scaled RTG
         use_cpa_scaled_rtg=bool(method_cfg.get("use_cpa_scaled_rtg", False)),
         cpa_scaled_rtg_mode=str(method_cfg.get("cpa_scaled_rtg_mode", "linear")),
         cpa_scaled_rtg_median=float(method_cfg.get("cpa_scaled_rtg_median", 95.0)),
-        # 方案B: Hindsight Truncation
         use_hindsight_truncation=bool(method_cfg.get("use_hindsight_truncation", False)),
         hindsight_truncation_cpa_thresh=float(method_cfg.get("hindsight_truncation_cpa_thresh", 80.0)),
         hindsight_truncation_min_len=int(method_cfg.get("hindsight_truncation_min_len", 5)),
-        # 方案C: Transition-Aware Sampling
         use_transition_sampling=bool(method_cfg.get("use_transition_sampling", False)),
         transition_sample_prob=float(method_cfg.get("transition_sample_prob", 0.30)),
         transition_window_before=int(method_cfg.get("transition_window_before", 10)),
         transition_window_after=int(method_cfg.get("transition_window_after", 5)),
-        # 方案R1: Dense CPA-Progress Reward
         use_cpa_progress_reward=bool(method_cfg.get("use_cpa_progress_reward", False)),
         cpa_progress_alpha=float(method_cfg.get("cpa_progress_alpha", 0.1)),
         cpa_progress_zero_mean=bool(method_cfg.get("cpa_progress_zero_mean", True)),
         cpa_progress_min_conv=int(method_cfg.get("cpa_progress_min_conv", 3)),
-        # QATS
         use_quality_aware_ht=bool(method_cfg.get("use_quality_aware_ht", False)),
         quality_ht_low_thresh=float(method_cfg.get("quality_ht_low_thresh", 0.25)),
         quality_ht_high_thresh=float(method_cfg.get("quality_ht_high_thresh", 0.80)),
@@ -136,7 +125,6 @@ def train_model(args):
     )
     logger.info("Replay buffer size: %d", len(replay_buffer))
 
-    # Validation buffer for early stopping (e.g., period 13)
     val_buffer = None
     if args.val_periods:
         val_buffer = MethodReplayBuffer(
@@ -162,7 +150,7 @@ def train_model(args):
             dense_reward_scale=float(method_cfg.get("dense_reward_scale", 0.3)),
             use_advantage_weight=bool(method_cfg.get("use_advantage_weight", False)),
             advantage_scale=float(method_cfg.get("advantage_scale", 2.0)),
-            use_rtg_noise=False,  # no noise during validation
+            use_rtg_noise=False,
             use_demo_prefix=bool(method_cfg.get("use_demo_prefix", False)),
             demo_prefix_len=int(method_cfg.get("demo_prefix_len", 4)),
             use_stratified_prefix_sampling=False,
@@ -206,8 +194,6 @@ def train_model(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.learning_rate), weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda steps: min((steps + 1) / 10000.0, 1.0))
 
-    # Resume: load weights from a checkpoint and fast-forward the warmup scheduler.
-    # ckpt stores only model_state_dict (no optimizer), so Adam moments restart — fine for a short continuation.
     resume_start_step = int(getattr(args, "start_step", 0))
     _init_ckpt = getattr(args, "init_ckpt", "")
     if _init_ckpt:
@@ -221,22 +207,20 @@ def train_model(args):
             pg["lr"] = float(args.learning_rate) * _mult
         logger.info("Resume: start_step=%d, LR fast-forwarded to %.2e", resume_start_step, float(args.learning_rate) * _mult)
 
-    # EMA shadow weights
     use_ema = bool(getattr(args, "use_ema", False))
     ema_decay = float(getattr(args, "ema_decay", 0.999))
-    ema_start_step = int(getattr(args, "ema_start_step", 6000))  # warmup before EMA kicks in
+    ema_start_step = int(getattr(args, "ema_start_step", 6000))
     ema_shadow: dict = {}
-    ema_active = False  # becomes True after ema_start_step
+    ema_active = False
     if use_ema:
         for name, param in model.named_parameters():
             ema_shadow[name] = param.data.clone().float()
         logger.info("EMA enabled (decay=%.4f, start_step=%d)", ema_decay, ema_start_step)
 
-    # SWA: collect last N checkpoints and average at the end
     use_swa = bool(getattr(args, "use_swa", False))
     swa_start_step = int(getattr(args, "swa_start_step", 12000))
     swa_interval = int(getattr(args, "swa_interval", 1000))
-    swa_snapshots: list = []  # list of state_dicts
+    swa_snapshots: list = []
     if use_swa:
         logger.info("SWA enabled (start_step=%d, interval=%d)", swa_start_step, swa_interval)
 
@@ -254,34 +238,22 @@ def train_model(args):
     patience_counter = 0
     best_path = save_dir / f"{args.method}.pt"
 
-    # 周期性最优 checkpoint 保存配置
-    # 从 ckpt_start_step 开始，每 ckpt_interval 步保存一次当前最优模型
-    # 每个 checkpoint 保存为 {method}_ckpt{step}.pt，同时记录该 checkpoint 的 loss
-    # 这样可以在训练结束后对每个 checkpoint 做推理，找到最优的训练轮次
     ckpt_start_step = int(getattr(args, "ckpt_start_step", 6000))
     ckpt_interval = int(getattr(args, "ckpt_interval", 1000))
-    # --ckpt_steps overrides start/interval when provided (e.g. "6000,8000,12000,16000")
     _ckpt_steps_raw = getattr(args, "ckpt_steps", "")
     ckpt_steps_set: set | None = (
         set(int(x.strip()) for x in _ckpt_steps_raw.split(",") if x.strip())
         if _ckpt_steps_raw else None
     )
-    ckpt_best_loss: dict = {}  # {step: best_smoothed_loss_at_that_step}
+    ckpt_best_loss: dict = {}
     ckpt_dir = save_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    # 记录每个 checkpoint 的元信息，供后续 eval 脚本读取
     ckpt_manifest_path = ckpt_dir / "manifest.json"
-    ckpt_manifest: list = []  # list of {"step": int, "path": str, "loss": float}
+    ckpt_manifest: list = []
 
     def save_periodic_ckpt(step: int, loss: float):
-        """
-        保存周期性 checkpoint。
-        每个 checkpoint 独立保存，不覆盖之前的，方便后续对每个 checkpoint 做推理。
-        同时更新 manifest.json 供 eval 脚本读取。
-        """
         ckpt_path = ckpt_dir / f"{args.method}_ckpt{step:06d}.pt"
         if use_ema and ema_active and ema_shadow:
-            # 保存 EMA 权重（与 best_path 保存逻辑一致）
             orig = {n: p.data.clone() for n, p in model.named_parameters()}
             for name, param in model.named_parameters():
                 param.data.copy_(ema_shadow[name].to(param.dtype))
@@ -307,7 +279,6 @@ def train_model(args):
         if use_ema and ema_active and ema_shadow:
             for name, param in model.named_parameters():
                 param.data.copy_(orig[name])
-        # 更新 manifest
         ckpt_manifest.append({"step": step, "path": str(ckpt_path), "loss": loss})
         ckpt_manifest_path.write_text(
             json.dumps(ckpt_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -316,7 +287,6 @@ def train_model(args):
 
     def save_ckpt():
         if use_ema and ema_active and ema_shadow:
-            # Temporarily swap in EMA weights for saving
             orig = {n: p.data.clone() for n, p in model.named_parameters()}
             for name, param in model.named_parameters():
                 param.data.copy_(ema_shadow[name].to(param.dtype))
@@ -338,13 +308,9 @@ def train_model(args):
             best_path,
         )
         if use_ema and ema_active and ema_shadow:
-            # Restore original weights so training continues normally
             for name, param in model.named_parameters():
                 param.data.copy_(orig[name])
 
-    # Rolling window for smoothed-loss checkpoint saving.
-    # Saves when the smoothed loss (avg of last save_smooth_k steps) is the best seen,
-    # rather than reacting to individual noisy loss spikes.
     save_smooth_k = int(getattr(args, "save_smooth_k", 500))
     recent_losses: list = []
 
@@ -357,10 +323,8 @@ def train_model(args):
         optimizer.step()
         scheduler.step()
 
-        # EMA update (only after warmup)
         if use_ema:
             if not ema_active and step >= ema_start_step:
-                # Initialize shadow from current weights at warmup end
                 for name, param in model.named_parameters():
                     ema_shadow[name] = param.data.clone().float()
                 ema_active = True
@@ -369,7 +333,6 @@ def train_model(args):
                 for name, param in model.named_parameters():
                     ema_shadow[name] = ema_decay * ema_shadow[name] + (1.0 - ema_decay) * param.data.float()
 
-        # SWA snapshot collection
         if use_swa and step >= swa_start_step and (step - swa_start_step) % swa_interval == 0:
             swa_snapshots.append({n: p.data.clone() for n, p in model.named_parameters()})
             logger.info("SWA snapshot collected at step %d (total=%d)", step, len(swa_snapshots))
@@ -378,7 +341,6 @@ def train_model(args):
             metrics = {k: float(v.detach().cpu().item()) for k, v in losses.items()}
             logger.info("Step %d/%d | %s", step, args.train_steps, json.dumps(metrics, ensure_ascii=False))
 
-        # Validation-based early stopping
         if val_buffer is not None and step % args.val_interval == 0:
             model.eval()
             val_loader = DataLoader(val_buffer, batch_size=args.batch_size, shuffle=True)
@@ -404,9 +366,6 @@ def train_model(args):
                     logger.info("Early stopping at step %d (patience=%d)", step, args.patience)
                     break
         elif val_buffer is None:
-            # Smoothed-loss checkpoint: save when rolling average of last save_smooth_k
-            # steps is the best seen. This avoids saving on transient loss spikes and
-            # makes the saved checkpoint deterministic given the same seed.
             total_loss = float(losses["loss"].detach().cpu().item())
             recent_losses.append(total_loss)
             if len(recent_losses) > save_smooth_k:
@@ -416,15 +375,11 @@ def train_model(args):
                 best_loss = smoothed
                 save_ckpt()
 
-            # 周期性 checkpoint：支持两种模式
-            # 1. --ckpt_steps 指定具体步数（如 6000,8000,12000,16000）
-            # 2. 默认：从 ckpt_start_step 开始，每 ckpt_interval 步一次
             _is_ckpt_step = (
                 step in ckpt_steps_set if ckpt_steps_set is not None
                 else (step >= ckpt_start_step and (step - ckpt_start_step) % ckpt_interval == 0)
             )
             if _is_ckpt_step:
-                # 记录该 checkpoint 步的 smoothed loss
                 ckpt_best_loss[step] = smoothed
                 save_periodic_ckpt(step, smoothed)
                 logger.info(
@@ -436,13 +391,11 @@ def train_model(args):
 
     logger.info("Training complete. Best val_loss: %.6f  Best train_loss: %.6f", best_val_loss, best_loss)
 
-    # SWA: average collected snapshots and save as a separate checkpoint
     if use_swa and len(swa_snapshots) >= 2:
         logger.info("SWA: averaging %d snapshots", len(swa_snapshots))
         swa_avg = {}
         for name in swa_snapshots[0]:
             swa_avg[name] = sum(s[name].float() for s in swa_snapshots) / len(swa_snapshots)
-        # Load SWA weights into model temporarily and save
         orig = {n: p.data.clone() for n, p in model.named_parameters()}
         for name, param in model.named_parameters():
             param.data.copy_(swa_avg[name].to(param.dtype))
@@ -469,7 +422,6 @@ def train_model(args):
         logger.info("SWA checkpoint saved: %s", swa_path)
 
     print(str(best_path))
-
 
 def main():
     parser = argparse.ArgumentParser(description="Train new_msdt_method variants")
@@ -519,7 +471,6 @@ def main():
     if not args.save_dir:
         args.save_dir = str(Path(__file__).resolve().parents[1] / "runs" / args.method)
     train_model(args)
-
 
 if __name__ == "__main__":
     main()

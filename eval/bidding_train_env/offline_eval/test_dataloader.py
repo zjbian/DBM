@@ -6,7 +6,6 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-
 class TestDataLoader:
     """
     Offline evaluation data loader.
@@ -63,7 +62,6 @@ class TestDataLoader:
         leastWinningCosts = data.groupby('timeStepIndex')['leastWinningCost'].apply(list).apply(np.array).tolist()
         num_timeStepIndex = len(pValues)
         return num_timeStepIndex, pValues, pValueSigmas, leastWinningCosts
-
 
 if __name__ == '__main__':
     pass

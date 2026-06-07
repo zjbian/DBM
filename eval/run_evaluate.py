@@ -10,21 +10,19 @@ import numpy as np
 
 np.random.seed(42)
 
-_EVAL_DIR = os.path.dirname(os.path.abspath(__file__))           # .../DBM/eval  (for bidding_train_env)
+_EVAL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _EVAL_DIR)
-sys.path.insert(0, os.path.dirname(_EVAL_DIR))                   # .../DBM       (for model)
+sys.path.insert(0, os.path.dirname(_EVAL_DIR))
 
 from bidding_train_env.offline_eval.offline_env import OfflineEnv
 from bidding_train_env.offline_eval.test_dataloader import TestDataLoader
 from bidding_train_env.strategy import PlayerBiddingStrategy
-
 
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(name)s] [%(filename)s(%(lineno)d)] [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger(__name__)
-
 
 def getScore_neurips(reward, cpa, cpa_constraint):
     beta = 2
@@ -33,7 +31,6 @@ def getScore_neurips(reward, cpa, cpa_constraint):
         coef = cpa_constraint / (cpa + 1e-10)
         penalty = pow(coef, beta)
     return penalty * reward
-
 
 def evaluate_single_period(agent, period_file: str, device: str = "cuda", budget_scale: float = 1.0, save_actions: bool = False):
     data_loader = TestDataLoader(file_path=period_file)
@@ -138,7 +135,6 @@ def evaluate_single_period(agent, period_file: str, device: str = "cuda", budget
         "advertiser_results": advertiser_results,
     }
 
-
 def main():
     parser = argparse.ArgumentParser(description="Benchmark-native evaluation for MSDT + sampling")
     parser.add_argument("--traffic_dir", type=str, default="./data/auctionnet/test_data")
@@ -216,7 +212,6 @@ def main():
     out_path.write_text(__import__("json").dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("saved benchmark results to %s", out_path)
     print(overall_score)
-
 
 if __name__ == "__main__":
     import torch

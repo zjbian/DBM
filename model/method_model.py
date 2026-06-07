@@ -19,12 +19,10 @@ import torch.nn.functional as F
 
 from .msdt_v2 import MultiScaleDecisionTransformerV2
 
-
 def masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     mask = mask.float().unsqueeze(-1)
     denom = mask.sum(dim=1).clamp_min(1.0)
     return (x * mask).sum(dim=1) / denom
-
 
 class ResearchMSDTModel(nn.Module):
     def __init__(self, *, config: Dict):
@@ -59,7 +57,6 @@ class ResearchMSDTModel(nn.Module):
         self.backbone_variant = "v2"
         self.hidden_size = int(self.backbone.hidden_size)
 
-        # Light state pre-encoder shared by training and inference.
         self.input_adapter = nn.Sequential(
             nn.Linear(self.state_dim + self.meta_dim, self.state_dim),
             nn.Tanh(),
@@ -67,7 +64,6 @@ class ResearchMSDTModel(nn.Module):
         )
         self.state_ln = nn.LayerNorm(self.state_dim)
 
-        # Selective-imitation quality head (predicts a per-trajectory quality in [0, 2]).
         self.quality_head = nn.Sequential(
             nn.Linear(self.hidden_size, 32),
             nn.ReLU(),
@@ -104,21 +100,17 @@ class ResearchMSDTModel(nn.Module):
         target_flat = actions.reshape(-1, self.act_dim)[valid]
         per_token_loss = ((pred_flat - target_flat) ** 2).mean(dim=-1)
 
-        # --- token weighting ---
         token_weights = batch["sample_weight"].unsqueeze(1).expand(-1, mask.shape[1]).reshape(-1)[valid]
         pooled = masked_mean(extras["fused_state_ctx"], mask)
 
-        # selective imitation: down-weight tokens from low-quality trajectories
         quality_pred = torch.sigmoid(self.quality_head(pooled)).squeeze(-1) * 2.0
         quality_expand = quality_pred.unsqueeze(1).expand(-1, mask.shape[1]).reshape(-1)[valid]
         token_weights = token_weights * (0.5 + quality_expand / 2.0)
 
-        # C2: up-weight tokens where the budget constraint is still feasible
         budget_left = states[:, :, 1].reshape(-1)[valid]
         c2_scale = float(self.config.get("c2_budget_scale", 3.0))
         token_weights = token_weights * (0.5 + 0.5 * torch.sigmoid(budget_left * c2_scale))
 
-        # prefix-feasibility: up-weight tokens whose cumulative CPA is still feasible
         pfeas = batch["prefix_feasibility"].squeeze(-1).reshape(-1)[valid]
         pfeas_scale = float(self.config.get("pfeas_scale", 1.5))
         token_weights = token_weights * (0.5 + pfeas_scale * pfeas)
@@ -129,7 +121,6 @@ class ResearchMSDTModel(nn.Module):
         total_loss = action_loss
         out = {"loss": total_loss, "action_loss": action_loss.detach()}
 
-        # conservative regularizer: penalize over-bidding once the budget is tight
         if self.config.get("use_conservative_reg", False):
             budget_left_seq = states[:, :, 1]
             tight_threshold = float(self.config.get("cons_tight_threshold", 0.3))
@@ -141,7 +132,6 @@ class ResearchMSDTModel(nn.Module):
             total_loss = total_loss + cons_weight * cons_loss
             out["cons_loss"] = cons_loss.detach()
 
-        # selective-imitation quality regression
         if self.config.get("use_selective_imitation", False):
             quality_target = batch["quality_target"].clamp(0.0, 2.0)
             selective_loss = F.smooth_l1_loss(quality_pred, quality_target)

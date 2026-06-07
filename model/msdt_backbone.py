@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class GranularityCalibrator(nn.Module):
     def __init__(
         self,
@@ -57,5 +56,4 @@ class GranularityCalibrator(nn.Module):
         g = torch.sigmoid(self.fuse_gate(torch.cat([e_coarse_cal, e_fine], dim=-1)))
         out = g * e_fine + (1.0 - g) * e_coarse_cal
         return self.out_ln(out)
-
 

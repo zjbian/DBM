@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import os
 import math
 
-
 class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -45,7 +44,6 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_drop(self.proj(y))
         return y
 
-
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -64,7 +62,6 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln2(x))
         return x
 
-
 class DecisionTransformer(nn.Module):
 
     def __init__(self, state_dim, act_dim, state_mean, state_std, action_tanh=False, K=10, max_ep_len=96, scale=2000,
@@ -76,7 +73,6 @@ class DecisionTransformer(nn.Module):
         self.hidden_size = 64
         self.state_mean = state_mean
         self.state_std = state_std
-        # assert self.hidden_size == config['n_embd']
         self.max_length = K
         self.max_ep_len = max_ep_len
 
@@ -168,12 +164,10 @@ class DecisionTransformer(nn.Module):
         return_preds = self.predict_return(x[:, 2])
         state_preds = self.predict_state(x[:, 2])
         action_preds = self.predict_action(x[:, 1])
-        # x[:, 1] = state positions in the transformer output (B, T, hidden_size)
         extras = {"fused_state_ctx": x[:, 1]} if kwargs.get("return_features", False) else None
         return state_preds, action_preds, return_preds, extras
 
     def get_action(self, states, actions, rewards, returns_to_go, timesteps, **kwargs):
-        # we don't care about the past rewards in this model
         states = states.reshape(1, -1, self.state_dim)
         actions = actions.reshape(1, -1, self.act_dim)
         returns_to_go = returns_to_go.reshape(1, -1, self.return_dim)

@@ -1,10 +1,3 @@
-"""
-MSDTv2: Multi-Scale Decision Transformer v2
-对原始 MSDT 的三项关键改进:
-  1. 因果卷积 —— 修复 CrossGranularityTemporalFusion 中的非因果 Conv1d
-  2. 输入相关粒度门控 —— 修复 granularity_attn 静态参数
-  3. 约束感知调制 —— 将预算余量/时间余量显式注入状态表示
-"""
 import math
 from typing import Optional, Sequence, Tuple
 
@@ -15,19 +8,7 @@ import torch.nn.functional as F
 from .base_dt import Block, DecisionTransformer
 from .msdt_backbone import GranularityCalibrator
 
-
-# ---------------------------------------------------------------------------
-# 1. 因果卷积版时序融合
-# ---------------------------------------------------------------------------
-
 class CausalTemporalFusionV2(nn.Module):
-    """
-    改进的跨粒度时序融合模块。
-
-    改动点（vs CrossGranularityTemporalFusion）:
-    - coarse_conv 改为因果卷积（仅对过去做局部平均，不泄漏未来）
-    - 去掉 stride=2 + interpolate（stride=2 不改变因果性问题，这里统一用 stride=1）
-    """
 
     def __init__(
         self,
@@ -41,27 +22,23 @@ class CausalTemporalFusionV2(nn.Module):
         self.hidden_size = int(hidden_size)
         self.n_head = int(n_head)
 
-        # 可学习局部窗口参数（同原版）
         self.window = nn.Parameter(torch.tensor(float(local_window)))
         self.window_beta = nn.Parameter(torch.tensor(4.0))
         self.window_temp = nn.Parameter(torch.tensor(1.0))
 
-        # --- 修复 1: 因果 Conv1d（kernel=3, stride=1, 左侧填充 kernel-1=2） ---
-        self._causal_pad = 2  # kernel_size - 1
+        self._causal_pad = 2
         self.coarse_conv = nn.Conv1d(
             in_channels=self.hidden_size,
             out_channels=self.hidden_size,
             kernel_size=3,
             stride=1,
-            padding=0,  # 手动左侧填充
+            padding=0,
         )
 
-        # 细粒度局部注意力（同原版）
         self.fine_qkv = nn.Linear(self.hidden_size, 3 * self.hidden_size)
         self.fine_proj = nn.Linear(self.hidden_size, self.hidden_size)
         self.fine_dropout = nn.Dropout(float(dropout))
 
-        # 跨粒度注意力（coarse 作为 K/V，fine 作为 Q）
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_size,
             num_heads=self.n_head,
@@ -72,7 +49,6 @@ class CausalTemporalFusionV2(nn.Module):
         self.ln2 = nn.LayerNorm(self.hidden_size)
 
     def _local_bias(self, T: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        """单调衰减的局部注意力偏置（只允许关注过去）。"""
         idx = torch.arange(T, device=device)
         dist = (idx.view(T, 1) - idx.view(1, T)).clamp(min=0).to(dtype)
         future = (idx.view(T, 1) - idx.view(1, T)) < 0
@@ -93,11 +69,9 @@ class CausalTemporalFusionV2(nn.Module):
 
         key_padding_mask = None if attention_mask is None else (attention_mask.to(torch.bool) == 0)
 
-        # --- 因果粗粒度特征（左侧填充，不看未来）---
-        xt = F.pad(x.transpose(1, 2), (self._causal_pad, 0))  # (B, H, T+2)
-        coarse = self.coarse_conv(xt).transpose(1, 2)           # (B, T, H)
+        xt = F.pad(x.transpose(1, 2), (self._causal_pad, 0))
+        coarse = self.coarse_conv(xt).transpose(1, 2)
 
-        # --- 细粒度局部注意力 ---
         qkv = self.fine_qkv(x)
         q, k, v = torch.chunk(qkv, 3, dim=-1)
         hd = H // self.n_head
@@ -112,7 +86,6 @@ class CausalTemporalFusionV2(nn.Module):
         fine = (att @ v).transpose(1, 2).contiguous().view(B, T, H)
         fine = self.ln1(x + self.fine_dropout(self.fine_proj(fine)))
 
-        # --- 跨粒度注意力（coarse → fine）---
         fused, _ = self.cross_attn(
             fine, coarse, coarse,
             attn_mask=self._causal_mask(T, x.device),
@@ -121,20 +94,7 @@ class CausalTemporalFusionV2(nn.Module):
         )
         return self.ln2(fine + fused)
 
-
-# ---------------------------------------------------------------------------
-# 2. 约束感知调制模块
-# ---------------------------------------------------------------------------
-
 class ConstraintModulator(nn.Module):
-    """
-    预算/时间约束感知调制器。
-
-    从状态向量中提取:
-      - dim 0: time_left  (归一化剩余时间)
-      - dim 1: budget_left (归一化剩余预算)
-    计算"紧迫感"信号并通过输入相关的门控叠加到状态表示上。
-    """
 
     def __init__(self, hidden_size: int):
         super().__init__()
@@ -146,42 +106,18 @@ class ConstraintModulator(nn.Module):
         self.gate = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, x: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
-        """
-        x:      (B, T, H)  已融合的状态表示
-        states: (B, T, state_dim) 归一化状态（budget_left = dim1, time_left = dim0）
-        """
-        budget = states[:, :, 1:2]            # 归一化预算余量
-        time = states[:, :, 0:1]              # 归一化时间余量
-        urgency = 1.0 - torch.sigmoid(budget) # 预算紧迫程度（预算越少越高）
-        feat = torch.cat([budget, time, urgency], dim=-1)  # (B, T, 3)
-        mod = self.proj(feat)                  # (B, T, H)
-        gate = torch.sigmoid(self.gate(x))    # 输入相关门控
-        # CPA-Arch: scale modulation by per-sample CPA tightness signal
-        # _cpa_scale is set externally by method_model.py when use_cpa_conditioned_mod=True
+        budget = states[:, :, 1:2]
+        time = states[:, :, 0:1]
+        urgency = 1.0 - torch.sigmoid(budget)
+        feat = torch.cat([budget, time, urgency], dim=-1)
+        mod = self.proj(feat)
+        gate = torch.sigmoid(self.gate(x))
         cpa_scale = getattr(self, "_cpa_scale", None)
         if cpa_scale is not None:
             mod = mod * cpa_scale
         return x + gate * mod
 
-
-# ---------------------------------------------------------------------------
-# 3. MSDTv2 主模型
-# ---------------------------------------------------------------------------
-
-
 class MultiScaleDecisionTransformerV2(DecisionTransformer):
-    """
-    MSDTv2: 在 MSDT 基础上的三项改进。
-
-    相比 legacy MSDT:
-    ✓ 因果卷积（不泄漏未来信息）
-    ✓ 输入相关粒度门控（取代静态 granularity_attn 参数）
-    ✓ 约束感知调制（预算/时间信号显式注入状态表示）
-
-    相比 improved MSDT:
-    ✓ 更轻量，单流编码器（不引入 ThreeStreamEncoder 的额外复杂度）
-    ✓ 直接在原始 MSDT 骨干上打补丁，更易验证改进效果
-    """
 
     def __init__(
         self,
@@ -201,11 +137,10 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
         constraint_idx: Sequence[int] = (0, 1, 4, 8, 10, 12, 13, 14, 15),
         local_window: int = 3,
         n_head: int = 4,
-        backbone_variant: str = "v2",  # accepted for interface compatibility; unused
-        # Model capacity
+        backbone_variant: str = "v2",
         hidden_size: int = 64,
         n_layers: int = 3,
-        n_inner: int = 0,  # 0 = auto (hidden_size * 4); set explicitly for compat with old ckpts
+        n_inner: int = 0,
     ):
         super().__init__(
             state_dim=state_dim,
@@ -220,7 +155,6 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
             return_dim=return_dim,
         )
 
-        # Override hidden_size (parent hardcodes 64) and rebuild dependent layers
         self.hidden_size = int(hidden_size)
         n_layers = int(n_layers)
         _n_inner = int(n_inner) if n_inner and n_inner > 0 else self.hidden_size * 4
@@ -234,7 +168,6 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
         self.predict_action = nn.Linear(self.hidden_size, self.act_dim)
         self.predict_return = nn.Linear(self.hidden_size, 1)
 
-        # --- 替换 transformer blocks（父类用默认 n_head=1，这里用参数化 n_head）---
         context_len = 1024
         block_config = {
             "n_ctx": context_len,
@@ -249,23 +182,19 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
         }
         self.transformer = nn.ModuleList([Block(block_config) for _ in range(n_layers)])
 
-        # --- Stage 1: feature-level GranularityCalibrator ---
         self.state_encoder = GranularityCalibrator(
             state_dim=int(state_dim), hidden_size=int(self.hidden_size),
             coarse_idx=coarse_idx, fine_idx=fine_idx,
         )
 
-        # --- Stage 2: causal temporal fusion (cross-granularity) ---
         self.temporal_fusion = CausalTemporalFusionV2(
             hidden_size=int(self.hidden_size),
             n_head=int(n_head),
             local_window=int(local_window),
         )
 
-        # --- input-dependent granularity gate ---
         self.granularity_gate_net = nn.Linear(int(self.hidden_size), int(self.hidden_size))
 
-        # --- constraint-aware modulator ---
         self.constraint_mod = ConstraintModulator(int(self.hidden_size))
 
     def forward(
@@ -277,13 +206,12 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
         timesteps: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         return_features: bool = False,
-        cpa_constraint: Optional[torch.Tensor] = None,  # (B,) raw CPA values for MoE routing
+        cpa_constraint: Optional[torch.Tensor] = None,
     ):
         B, T = states.shape[0], states.shape[1]
         if attention_mask is None:
             attention_mask = torch.ones((B, T), dtype=torch.long, device=states.device)
 
-        # 嵌入
         state_embeddings = self.state_encoder(states)
         action_embeddings = self.embed_action(actions)
         returns_embeddings = self.embed_return(returns_to_go)
@@ -293,7 +221,6 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
         action_embeddings = action_embeddings + time_embeddings
         returns_embeddings = returns_embeddings + time_embeddings
 
-        # 交错堆叠 [R, s, a]
         stacked_inputs = (
             torch.stack((returns_embeddings, state_embeddings, action_embeddings), dim=1)
             .permute(0, 2, 1, 3)
@@ -313,15 +240,12 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
             x = block(x, stacked_mask)
 
         x = x.reshape(B, T, self.length_times, self.hidden_size).permute(0, 2, 1, 3)
-        state_ctx = x[:, 1]  # (B, T, H)
+        state_ctx = x[:, 1]
 
-        # --- Stage 2: causal temporal fusion (cross-granularity) ---
         fused = self.temporal_fusion(state_ctx, attention_mask=attention_mask)
 
-        # --- constraint-aware modulation (inject budget/time signals) ---
         fused = self.constraint_mod(fused, states)
 
-        # --- input-dependent granularity gate ---
         gate = torch.sigmoid(self.granularity_gate_net(state_ctx))
         fused_state_ctx = gate * fused + (1.0 - gate) * state_ctx
 
@@ -351,21 +275,14 @@ class MultiScaleDecisionTransformerV2(DecisionTransformer):
             self.eval_rewards[-1] = pre_reward
             pred_return = self.eval_target_return[:, -1, :].clone()
             
-            # Dimension 0: Reward RTG
             pred_return[:, 0] = pred_return[:, 0] - (pre_reward / self.scale)
             
             if self.return_dim > 1 and pre_cost is not None:
-                # Dimension 1: Either CPA-Slack or Budget RTG
-                # If cpa_constraint is provided, it's CPA-Slack: cpa_slack_t = cpa_slack_{t-1} - cpa * pre_reward + pre_cost
                 if cpa_constraint is not None:
                     cpa_c = float(cpa_constraint)
-                    # Notice we also need to scale the cpa_constraint appropriately if needed, 
-                    # but cpa_slack in dataset is: cpa_c * reward_rtg - future_cost. 
-                    # The delta is - cpa_c * pre_reward + pre_cost
                     delta = (-cpa_c * pre_reward + pre_cost) / self.scale
                     pred_return[:, 1] = pred_return[:, 1] + delta
                 else:
-                    # Default: Budget RTG
                     pred_return[:, 1] = torch.clamp(pred_return[:, 1] - (pre_cost / self.scale), min=0.0)
             
             self.eval_target_return = torch.cat([self.eval_target_return, pred_return.unsqueeze(1)], dim=1)

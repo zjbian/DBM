@@ -1,6 +1,5 @@
 import numpy as np
 
-
 class OfflineEnv:
     """
     Simulate an advertising bidding environment.
@@ -33,7 +32,6 @@ class OfflineEnv:
 
         return tick_value, tick_cost, tick_status,tick_conversion
 
-
 def test():
     pv_values = np.array([10, 20, 30, 40, 50])
     pv_values_sigma = np.array([1, 2, 3, 4, 5])
@@ -46,7 +44,6 @@ def test():
     print(f"Tick Value: {tick_value}")
     print(f"Tick Cost: {tick_cost}")
     print(f"Tick Status: {tick_status}")
-
 
 if __name__ == '__main__':
     test()
